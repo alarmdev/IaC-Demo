@@ -1,0 +1,73 @@
+name: AppSec Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+
+jobs:
+  appsec-security-scan:
+    name: Application Security Scans
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+    # 1. Checkout source
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    # 2. Setup Python (if Python project)
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    # 3. Install dependencies
+    - name: Install Dependencies
+      run: |
+        if [ -f "requirements.txt" ]; then pip install -r requirements.txt; fi
+
+    # 4. Install Snyk CLI
+    - name: Install Snyk
+      uses: snyk/actions/setup@v3
+      with:
+        snyk_version: "latest"
+
+    # 5. Snyk Code SAST & Software Composition Analysis (SCA)
+    - name: Snyk Test (SAST & SCA)
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      run: snyk test --all-projects --severity-threshold=medium
+
+    # 6. Container Scan (Trivy)
+    - name: Build Docker Image
+      run: docker build -t app:latest .
+
+    - name: Trivy Container Scan
+      uses: aquasecurity/trivy-action@0.20.0
+      with:
+        image-ref: app:latest
+        format: sarif
+        output: trivy-results.sarif
+
+    # 7. Generate SBOM (CycloneDX)
+    - name: Generate SBOM
+      run: |
+        pip install cyclonedx-bom
+        cyclonedx-py -o sbom.json
+
+    # 8. Upload scan results to GitHub Security Dashboard
+    - name: Upload Trivy Report
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: trivy-results.sarif
+
+    # 9. Upload SBOM as artifact
+    - name: Upload SBOM Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: sbom
+        path: sbom.json
